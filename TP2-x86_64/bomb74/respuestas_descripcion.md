@@ -40,3 +40,19 @@ Joaquín León Alderete (jleonalderete@udesa.edu.ar)
 - Se encontraron 6 índices `[1, 1, 9, 12, 15, 8]` cuya suma en `array.0` era `13 + 13 + 12 + 11 + 9 + 1 = 59`.
 - Se construyó la cadena `AAILOH` con caracteres que producían esos índices (`'A'` para 1, `'I'` para 9, `'L'` para 12, `'O'` para 15, `'H'` para 8).
 - Se ingresó `AAILOH`, desactivando la fase con éxito.
+
+## Fase secreta
+
+**Cómo acceder a ella**:
+Analizando la función `phase_defused` pude observar que en el flujo de ejecución, chequeaba la cantidad de inputs. Cuando esa cantidad llegaba a 4, se hacia un `scanf`, que verificando lo que contenía la direccion que cargaban en `$rsi` pude observar que esperaba `%s %d %s`. Por lo que estaba esperando un input para parsear con el formato `string int string`. Luego comprobé el registro que contenia el segundo parámetro de la función, `$rdi` y pude observar el input que habia pasado en la fase 3, que además, era consistente, con el formato que tenía los dos primeros miembros del input. Luego se utilizaba la función `strings_not_equal` y viendo en la dirección del primer parametro, encontre que estaba intentando coincidir `"abrete_sesamo"`.
+
+**Qué hacía el código**:
+- Parseaba la entrada a un entero y verificaba que `entrada - 1 < 1001`.
+- Utilizaba la entrada como input para una función `fun7` que realizaba una busqueda de árbol binaria comenzando con el nodo en la dirección `0x4f91f0`.
+- La función a su vez, era recursiva y los casos base eran que el puntero al nodo sea null y retornaba `-1`, que el nodo contenga el valor que recibió por parametro la función y retornaba `0`, si buscaba para la izquierda multiplicaba por dos, y si buscaba en la derecha multiplicaba por dos y sumaba ´1´.
+- Chequeaba que el retorno de esta función sea igual a `6`.
+
+**Cómo se resolvió**:
+- Para que la función retorne `6`, debia recorrer desde el nodo raíz, `root -> left -> right -> right` y hallar el valor.
+- Con gdb seguí el camino nodo por nodo con las direcciones hasta dar con el nodo destino, donde verifiqué que su valor era de `35`.
+- Se ingresó `35`, desactivando la fase con éxito.
