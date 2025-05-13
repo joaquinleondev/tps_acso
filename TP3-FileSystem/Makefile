@@ -35,6 +35,7 @@ $(LIB): $(LIB_OBJ)
 clean::
 	rm -f $(PROG) $(PROG_OBJ) $(PROG_DEP)
 	rm -f $(LIB) $(LIB_DEP) $(LIB_OBJ)
+	rm -f *.txt
 
 .PHONY: all clean 
 
