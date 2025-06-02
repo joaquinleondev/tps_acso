@@ -11,7 +11,7 @@
 #include <signal.h>
 
 #define MAX_COMMANDS_IN_PIPELINE 200
-#define MAX_ARGS_PER_COMMAND 32
+#define MAX_ARGS_PER_COMMAND 64
 #define MAX_LINE 4096
 
 char *trim_whitespace(char *str)
@@ -93,12 +93,20 @@ char **parse_command_args(char *input)
             p++;
         else if (!quote && isspace((unsigned char)*p))
             p++;
-        else if (*p != '\0' && !isspace((unsigned char)*p) && !quote)
-        {
-            /* In case of unquoted argument followed immediately by non-space, non-null char (should not happen if line ends or next is delimiter) */
-            /* Or if *p became null after quote processing, this path is not taken */
-        }
     }
+
+    // Verificar si hay argumentos adicionales después del límite
+    while (isspace((unsigned char)*p))
+        p++;
+    if (*p != '\0')
+    {
+        fprintf(stderr, "Shell: too many arguments (maximum %d allowed)\n", MAX_ARGS_PER_COMMAND);
+        for (int i = 0; i < argc; i++)
+            free(argv[i]);
+        free(argv);
+        return NULL;
+    }
+
     argv[argc] = NULL;
     return argv;
 }
@@ -137,14 +145,6 @@ int main()
         if (trimmed[0] == '\0')
             continue;
 
-        if (trimmed[0] == '|' || (strlen(trimmed) > 0 && trimmed[strlen(trimmed) - 1] == '|'))
-        {
-            fprintf(stderr, "Shell: Syntax error near unexpected token `|'\n");
-            continue;
-        }
-
-        char *commands_storage[MAX_COMMANDS_IN_PIPELINE];
-        int num_commands = 0;
         char *line_copy = strdup(trimmed);
         if (!line_copy)
         {
@@ -152,34 +152,62 @@ int main()
             continue;
         }
 
-        char *token = strtok(line_copy, "|");
-        while (token && num_commands < MAX_COMMANDS_IN_PIPELINE)
+        char *commands_storage[MAX_COMMANDS_IN_PIPELINE];
+        int num_commands = 0;
+        int in_single_quote = 0;
+        int in_double_quote = 0;
+        char *start = line_copy;
+        char *current = line_copy;
+
+        while (*current && num_commands < MAX_COMMANDS_IN_PIPELINE)
         {
-            char *segment = trim_whitespace(token);
-            if (segment[0] == '\0')
+            if (*current == '\'' && !in_double_quote)
             {
-                fprintf(stderr, "Shell: Syntax error near unexpected token `|'\n");
-                num_commands = -1;
-                break;
+                in_single_quote = !in_single_quote;
             }
-            commands_storage[num_commands++] = segment;
-            token = strtok(NULL, "|");
+            else if (*current == '"' && !in_single_quote)
+            {
+                in_double_quote = !in_double_quote;
+            }
+            else if (*current == '|' && !in_single_quote && !in_double_quote)
+            {
+                *current = '\0';
+                char *seg = trim_whitespace(start);
+                if (seg[0] == '\0')
+                {
+                    fprintf(stderr, "Shell: Syntax error near unexpected token `|'\n");
+                    num_commands = -1;
+                    break;
+                }
+                commands_storage[num_commands++] = seg;
+                start = current + 1;
+            }
+            current++;
         }
 
-        if (num_commands <= 0)
+        if (num_commands == -1)
         {
             free(line_copy);
             continue;
         }
 
-        if (strcmp(commands_storage[0], "exit") == 0)
+        char *last_seg = trim_whitespace(start);
+        if (last_seg[0] == '\0')
         {
-            if (num_commands > 1)
+            if (num_commands == 0)
             {
-                fprintf(stderr, "Shell: \"exit\" cannot be part of a pipeline\n");
                 free(line_copy);
                 continue;
             }
+            fprintf(stderr, "Shell: Syntax error near unexpected token `|'\n");
+            free(line_copy);
+            continue;
+        }
+        commands_storage[num_commands++] = last_seg;
+
+        // Verificar comando "exit" sin pipeline
+        if (num_commands == 1 && strcmp(commands_storage[0], "exit") == 0)
+        {
             free(line_copy);
             break;
         }
@@ -195,16 +223,21 @@ int main()
             }
         }
 
-        pid_t pids[MAX_COMMANDS_IN_PIPELINE];
+        char **argvs[MAX_COMMANDS_IN_PIPELINE] = {NULL};
+        pid_t pids[MAX_COMMANDS_IN_PIPELINE] = {0};
         bool pipeline_error = false;
 
         for (int i = 0; i < num_commands; i++)
         {
-            char **argv = parse_command_args(commands_storage[i]);
-            if (!argv || !argv[0])
+            argvs[i] = parse_command_args(commands_storage[i]);
+            if (!argvs[i])
             {
-                fprintf(stderr, "Shell: parsing error or empty command for: %s\n", commands_storage[i]);
-                free_args(argv);
+                pipeline_error = true;
+                break;
+            }
+            if (!argvs[i][0])
+            {
+                fprintf(stderr, "Shell: empty command for: %s\n", commands_storage[i]);
                 pipeline_error = true;
                 break;
             }
@@ -213,13 +246,17 @@ int main()
             if (pids[i] < 0)
             {
                 perror("Shell: fork");
-                free_args(argv);
                 pipeline_error = true;
                 break;
             }
 
             if (pids[i] == 0)
             {
+                if (strcmp(argvs[i][0], "exit") == 0)
+                {
+                    exit(EXIT_SUCCESS);
+                }
+
                 if (i > 0)
                 {
                     if (dup2(pipe_descriptors[i - 1][0], STDIN_FILENO) < 0)
@@ -241,13 +278,10 @@ int main()
                     close(pipe_descriptors[j][0]);
                     close(pipe_descriptors[j][1]);
                 }
-                execvp(argv[0], argv);
+                execvp(argvs[i][0], argvs[i]);
                 perror("Shell: execvp");
-                free_args(argv);
-                free(line_copy);
                 exit(EXIT_FAILURE);
             }
-            free_args(argv);
         }
 
         for (int i = 0; i < num_commands - 1; i++)
@@ -260,7 +294,10 @@ int main()
         {
             for (int i = 0; i < num_commands; i++)
             {
-                waitpid(pids[i], NULL, 0);
+                if (pids[i] > 0)
+                {
+                    waitpid(pids[i], NULL, 0);
+                }
             }
         }
         else
@@ -272,6 +309,15 @@ int main()
                     kill(pids[i], SIGTERM);
                     waitpid(pids[i], NULL, 0);
                 }
+            }
+        }
+
+        // Liberar memoria de argumentos
+        for (int i = 0; i < num_commands; i++)
+        {
+            if (argvs[i])
+            {
+                free_args(argvs[i]);
             }
         }
 
